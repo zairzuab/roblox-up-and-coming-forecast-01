@@ -15,13 +15,13 @@ keeps a score (`-rank`). Every hour the score drifts by a shrunk
 rank-velocity momentum (rising games keep rising) minus a small age
 decay for games older than 2 days, plus Gaussian noise. Ranks each hour
 are the score order. Probabilities are the simulated frequencies over
-300 seeded runs, naming the 15 most frequent games per place.
+1000 seeded runs, naming the 15 most frequent games per place.
 
 Tuned on the practice history (4 backtest cutoffs, 10 reads each):
 mean log score **-36.55** vs house baseline **-45.01** (official
 practice baseline -43.51).
 
-Parameters: `sims=300`, `sigma=2.5`, `drift_shrink=0.237`,
+Parameters: `sims=1000`, `sigma=2.5`, `drift_shrink=0.237`,
 `age_decay=0.02`, `named_per_place=15`, `seed=12345`.
 
 ## Run locally
