@@ -10,7 +10,7 @@ Method: simulate the chart 72 hours forward. Each game keeps a score
 (-rank). Every hour the score drifts by a shrunk rank-velocity momentum
 (rising games keep rising) minus a small age decay for games older than
 2 days, plus Gaussian noise. Ranks each hour are the score order.
-Probabilities are the simulated frequencies over 300 seeded runs.
+Probabilities are the simulated frequencies over 1000 seeded runs.
 
 Tuned on the practice history (4 backtest cutoffs, 10 reads each):
 mean log score -36.55 vs house baseline -45.01 (official practice
@@ -29,7 +29,7 @@ from datetime import datetime
 
 PLACES = 10
 HOURS = 72
-SIMS = 300
+SIMS = 1000
 SIGMA = 2.5
 DRIFT_SHRINK = 0.237
 AGE_DECAY = 0.02
