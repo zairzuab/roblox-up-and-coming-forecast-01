@@ -115,7 +115,7 @@ def mc_forecast(hist):
                 rank_sum[u] += k + 1
                 rank_cnt[u] += 1
 
-    total = HOURS * SIMS
+    total = SIMS * HOURS
     probs = []
     for k in range(1, PLACES + 1):
         top = sorted(counts[k].items(), key=lambda kv: -kv[1])[:NAMED_PER_PLACE]
