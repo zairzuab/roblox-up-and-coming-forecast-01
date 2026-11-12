@@ -112,7 +112,7 @@ def mc_forecast(hist):
                 g = ranked[k]
                 counts[k + 1][g] = counts[k + 1].get(g, 0) + 1
             for k, u in enumerate(ranked):
-                rank_sum[u] += k + 1
+                rank_sum[u] += 1 + k
                 rank_cnt[u] += 1
 
     total = SIMS * HOURS
