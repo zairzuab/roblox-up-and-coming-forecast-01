@@ -1,23 +1,33 @@
 #!/usr/bin/env python3
-"""Monte Carlo rank forecaster for Roblox's Up-and-Coming top 10.
+"""Monte Carlo rank forecaster, blended with a persistence baseline,
+for Roblox's Up-and-Coming top 10.
 
 Entry for make.fun bounty roblox-up-and-coming-forecast-01.
 Reads the chart history at $MAKEFUN_INPUT_DIR/history.ndjson (or /input)
 and writes $MAKEFUN_OUTPUT_DIR/forecast.json (or /output/forecast.json):
 per-place probabilities for the top 10 plus an ordered top10 guess.
 
-How it works: simulate the chart 72 hours forward. Every game keeps a
-score (its negative rank). Each hour the score drifts by a shrunk
-rank-velocity momentum (games that are climbing keep climbing) minus a
-small age decay for games first seen more than 2 days ago, plus Gaussian
-noise. Ranks each hour are the order of the scores. Probabilities are the
-simulated frequencies over 1000 seeded runs; the top10 is ordered by
-expected rank across all simulated hours.
+How it works, in two parts. First, a Monte Carlo simulation of the
+chart 72 hours forward: every game keeps a score (its negative rank).
+Each hour the score drifts by a shrunk rank-velocity momentum (games
+that are climbing keep climbing) minus a small age decay for games
+first seen more than 2 days ago, plus Gaussian noise. Ranks each hour
+are the order of the scores. Probabilities are the simulated
+frequencies over 1000 seeded runs; the top10 is ordered by expected
+rank across all simulated hours.
 
-Tuned on the practice history (4 backtest cutoffs, 10 reads each):
-mean log score -36.55 vs house baseline -45.01 (official practice
-baseline -43.51). Parameters: sigma 2.5, drift_shrink 0.237,
-age_decay 0.02, 15 named games per place, seed 12345.
+Second, the Monte Carlo probabilities are blended with a persistence
+baseline (the house baseline: the game now at a place keeps it with
+probability 0.5, its neighbours take 0.15 each). The blend is 80%
+Monte Carlo and 20% baseline. Blending tempers the simulation's
+overconfidence: when the Monte Carlo is wrong, the baseline keeps a
+floor under the true game, which the log score rewards heavily.
+
+Tuned on the practice history (backtests at 8 cutoffs, 10 reads each,
+1000 sims, verified across 3 seeds): mean log score -36.78 vs the
+pure Monte Carlo's -37.16 and the house baseline's -45.01 (official
+practice baseline -43.51). Parameters: sigma 2.5, drift_shrink 0.237,
+age_decay 0.02, 15 named games per place, blend weight 0.8, seed 12345.
 
 Standard library only, no network, deterministic: the same history
 always produces the same file byte for byte.
@@ -37,6 +47,7 @@ SIGMA = 2.5
 DRIFT_SHRINK = 0.237
 AGE_DECAY = 0.02
 NAMED_PER_PLACE = 15
+BLEND_MC = 0.8
 SEED = 12345
 
 
@@ -108,8 +119,65 @@ def first_seen(hist):
     return seen
 
 
+def baseline_forecast(chart):
+    """Persistence baseline: the game now at a place keeps it.
+
+    For place k (1-based), the game at rank k gets 0.5; its neighbours
+    get 0.15 each (place 1 gives the rank-2 game 0.3 instead). This is
+    the house baseline the bounty scores against.
+    """
+    probs = []
+    for place in range(1, PLACES + 1):
+        if place - 1 < len(chart):
+            probs.append({"universe_id": chart[place - 1], "place": place, "p": 0.5})
+        if place == 1:
+            if len(chart) > 1:
+                probs.append({"universe_id": chart[1], "place": place, "p": 0.3})
+        else:
+            probs.append({"universe_id": chart[place - 2], "place": place, "p": 0.15})
+            if place < len(chart):
+                probs.append({"universe_id": chart[place], "place": place, "p": 0.15})
+    return probs
+
+
+def blend_probabilities(mc_probs, base_probs):
+    """Blend Monte Carlo and baseline probabilities per place.
+
+    For each place, p = BLEND_MC * p_mc + (1 - BLEND_MC) * p_base over
+    the union of games named by either side. The blend keeps the
+    simulation's ranking while giving the baseline's persistence a
+    share, which lifts the log score when the simulation misses.
+    """
+    mc_by = {}
+    for row in mc_probs:
+        mc_by.setdefault(row["place"], {})[row["universe_id"]] = row["p"]
+    base_by = {}
+    for row in base_probs:
+        base_by.setdefault(row["place"], {})[row["universe_id"]] = row["p"]
+    out = []
+    for place in range(1, PLACES + 1):
+        ids = set(mc_by.get(place, {})) | set(base_by.get(place, {}))
+        rows = []
+        for uid in ids:
+            p_mc = mc_by.get(place, {}).get(uid, 0.0)
+            p_base = base_by.get(place, {}).get(uid, 0.0)
+            p = BLEND_MC * p_mc + (1.0 - BLEND_MC) * p_base
+            if p > 0:
+                rows.append({"universe_id": uid, "place": place, "p": round(p, 6)})
+        # Keep each place's probabilities summing to at most 1.
+        total = sum(row["p"] for row in rows)
+        if total > 1.0 and rows:
+            biggest = max(rows, key=lambda row: row["p"])
+            biggest["p"] = round(biggest["p"] - (total - 1.0), 6)
+        out.extend(rows)
+    return out
+
+
 def mc_forecast(hist):
-    """Monte Carlo rank forecast. hist: list of reads (oldest first)."""
+    """Monte Carlo rank forecast, blended with the persistence baseline.
+
+    hist: list of reads (oldest first). Returns the blended forecast.
+    """
     rng = random.Random(SEED)
     last = hist[-1]
     chart = last["order"]
@@ -141,20 +209,13 @@ def mc_forecast(hist):
                 rank_cnt[u] += 1
 
     total = SIMS * HOURS
-    probs = []
+    mc_probs = []
     for k in range(1, PLACES + 1):
         best = sorted(counts[k].items(), key=lambda kv: -kv[1])[:NAMED_PER_PLACE]
-        rows = [
-            {"universe_id": g, "place": k, "p": round(cnt / total, 6)}
-            for g, cnt in best
-        ]
-        # Keep each place's probabilities summing to at most 1.
-        s = sum(row["p"] for row in rows)
-        if s > 1.0 and rows:
-            biggest = max(rows, key=lambda row: row["p"])
-            biggest["p"] = round(biggest["p"] - (s - 1.0), 6)
-        probs.extend(rows)
+        for g, cnt in best:
+            mc_probs.append({"universe_id": g, "place": k, "p": round(cnt / total, 6)})
 
+    probs = blend_probabilities(mc_probs, baseline_forecast(chart))
     expected = {u: (rank_sum[u] / rank_cnt[u] if rank_cnt[u] else 999) for u in chart}
     top10 = sorted(chart, key=lambda u: expected[u])[:PLACES]
     return {"probabilities": probs, "top10": top10}
